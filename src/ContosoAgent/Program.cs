@@ -38,29 +38,71 @@ using IChatClient samplingClient = openAIClient
     .UseOpenTelemetry(loggerFactory: loggerFactory, configure: o => o.EnableSensitiveData = true)
     .Build();
 
-var mcpClient = await McpClientFactory.CreateAsync(
-    new StdioClientTransport(
-        new()
-        {
-            Command = "dotnet",
-            Arguments =
-            [
-                "run",
-                "--project",
-                "C:\\Users\\donal\\src\\ms\\ContosoMcp\\src\\ContosoMcpServer\\ContosoMcpServer.csproj",
-            ],
-            Name = "ContosoMcpServer",
-        }
-    ),
-    clientOptions: new()
+// var mcpClient = await McpClientFactory.CreateAsync(
+//     new StdioClientTransport(
+//         new()
+//         {
+//             Command = "dotnet",
+//             Arguments =
+//             [
+//                 "run",
+//                 "--project",
+//                 "C:\\Users\\donal\\src\\ms\\ContosoMcp\\src\\ContosoMcpServer\\ContosoMcpServer.csproj",
+//             ],
+//             Name = "ContosoMcpServer",
+//         }
+//     ),
+//     clientOptions: new()
+//     {
+//         Capabilities = new()
+//         {
+//             Sampling = new() { SamplingHandler = samplingClient.CreateSamplingHandler() },
+//         },
+//     },
+//     loggerFactory: loggerFactory
+// );
+
+var targetServerName = "ContosoMcpServer";
+IMcpClient mcpClient = null;
+
+ModelContextProtocolServerCatalog McpCatalog = ActionRuntimeFactory.CreateMCPCatalog();
+ModelContextProtocolClientContext clientContext = McpCatalog.CreateClientContext();
+
+// Loop through WMCP servers and being Client/Server Transports.
+foreach (ModelContextProtocolServerInfo serverInfo in McpCatalog.GetServerInfos())
+{
+    Console.Write($"Found server {serverInfo.Name}...");
+
+    // Check if the server is the one we want to connect to.
+    if (serverInfo.Name != targetServerName)
     {
-        Capabilities = new()
-        {
-            Sampling = new() { SamplingHandler = samplingClient.CreateSamplingHandler() },
-        },
-    },
-    loggerFactory: loggerFactory
-);
+        Console.WriteLine($"skipping {serverInfo.Name}");
+        continue;
+    }
+
+
+    // Invoke the proxy server to get launch arguments for server.
+    IModelContextProtocolServer info = McpCatalog.ActivateServer(serverInfo.Id, clientContext);
+
+    StdioClientTransportOptions transportOptions = new()
+    {
+        Name = serverInfo.Name,
+        Command = info.Command,
+        Arguments = info.GetCommandArguments()
+    };
+
+    StdioClientTransport clientTransport = new(transportOptions);
+    McpClientOptions? clientOptions = null;
+
+    // Connect to the WMCP server to begin MCP communication.
+    mcpClient = await McpClientFactory.CreateAsync(clientTransport, clientOptions);
+    Console.WriteLine($"connected!");
+}
+if (mcpClient == null)
+{
+    Console.WriteLine("Failed to connect to MCP server.");
+    return;
+}
 
 // Get all available tools
 Console.WriteLine("Tools available:");
