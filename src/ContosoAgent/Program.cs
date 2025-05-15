@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.AI;
+﻿using System.Runtime.InteropServices;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol.Transport;
@@ -7,7 +8,33 @@ using OpenTelemetry;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using Windows.AI.ModelContextProtocol;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.System.Com;
+using WinRT;
+const string MCPServerCatalogClsidStr = "E5A7940E-F7B0-46CB-811E-6E1499B39D33";
+const string IMcpServerCatalogIID = "062B8A5E-B124-4490-A1BA-4692875DF83E";
+const string ContosoMcpServerName = "Contoso MCP Server";
 
+static unsafe ModelContextProtocolServerCatalog CreateMCPCatalog()
+{
+    IntPtr abiPtr = default;
+    try
+    {
+        Guid classId = Guid.Parse(MCPServerCatalogClsidStr);
+        Guid iid = Guid.Parse(IMcpServerCatalogIID);
+
+        HRESULT hresult = PInvoke.CoCreateInstance(&classId, null, CLSCTX.CLSCTX_LOCAL_SERVER, &iid, (void**)&abiPtr);
+        Marshal.ThrowExceptionForHR((int)hresult);
+
+        return MarshalInterface<ModelContextProtocolServerCatalog>.FromAbi(abiPtr);
+    }
+    finally
+    {
+        MarshalInspectable<object>.DisposeAbi(abiPtr);
+    }
+}
 using var tracerProvider = Sdk.CreateTracerProviderBuilder()
     .AddHttpClientInstrumentation()
     .AddSource("*")
@@ -29,7 +56,7 @@ Console.WriteLine("Connecting client to MCP 'ContosoMcp' server");
 // Provide your own OPENAI_API_KEY via an environment variable.
 var openAIClient = new OpenAIClient(
     Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-).GetChatClient("gpt-4o-mini");
+    ).GetChatClient("gpt-4o-mini");
 
 // Create a sampling client.
 using IChatClient samplingClient = openAIClient
@@ -62,10 +89,9 @@ using IChatClient samplingClient = openAIClient
 //     loggerFactory: loggerFactory
 // );
 
-var targetServerName = "ContosoMcpServer";
 IMcpClient mcpClient = null;
 
-ModelContextProtocolServerCatalog McpCatalog = ActionRuntimeFactory.CreateMCPCatalog();
+ModelContextProtocolServerCatalog McpCatalog = CreateMCPCatalog();
 ModelContextProtocolClientContext clientContext = McpCatalog.CreateClientContext();
 
 // Loop through WMCP servers and being Client/Server Transports.
@@ -74,7 +100,7 @@ foreach (ModelContextProtocolServerInfo serverInfo in McpCatalog.GetServerInfos(
     Console.Write($"Found server {serverInfo.Name}...");
 
     // Check if the server is the one we want to connect to.
-    if (serverInfo.Name != targetServerName)
+    if (serverInfo.Name != ContosoMcpServerName)
     {
         Console.WriteLine($"skipping {serverInfo.Name}");
         continue;
@@ -97,10 +123,13 @@ foreach (ModelContextProtocolServerInfo serverInfo in McpCatalog.GetServerInfos(
     // Connect to the WMCP server to begin MCP communication.
     mcpClient = await McpClientFactory.CreateAsync(clientTransport, clientOptions);
     Console.WriteLine($"connected!");
+    break;
 }
+
 if (mcpClient == null)
 {
     Console.WriteLine("Failed to connect to MCP server.");
+    Console.ReadKey();
     return;
 }
 
